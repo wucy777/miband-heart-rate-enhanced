@@ -1,0 +1,40 @@
+[package]
+name = "miband-heart-rate"
+authors = ["Tnze", "wucy777"]
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+description = "MiBand Heart Rate for OBS"
+repository = "https://github.com/wucy777/miband-heart-rate-enhanced"
+build = "build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# 只用到 warp 的 filter/reply/cors/sse，用不到 multipart 与 websocket。
+# 关掉默认特性可以少编译一整串依赖，二进制也更小。
+warp = { version = "0.3.7", default-features = false }
+tokio = { version = "1.45.1", features = [
+    "macros",
+    "rt-multi-thread",
+    "time",
+    "sync",
+    "net",
+] }
+bluest = "0.6.8"
+# 用 1.13 与 bluest 内部依赖的版本统一，避免同时编译两份 futures-lite。
+# 这里只用到 StreamExt::next，两个版本的签名一致。
+futures-lite = "1.13"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+
+# 给 exe 嵌入图标与版本资源（仅 Windows）
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+# 发布构建：体积优先。
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/favicon.ico" />
+    <title>MiBand 心率控制台</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #14161a;
+            --panel: #1c1f25;
+            --panel-2: #101216;
+            --line: #2b3038;
+            --text: #e6e8eb;
+            --dim: #9aa0a6;
+            --accent: #f20044;
+            --ok: #35c46a;
+            --warn: #e0a33e;
+            --err: #e05a4e;
+            /* 动画只用 transform / opacity，交给合成层，不触发重排重绘 */
+            --ease: cubic-bezier(.2, .8, .2, 1);
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            background: var(--bg);
+            color: var(--text);
+            font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        }
+
+        .wrap { max-width: 880px; margin: 0 auto; }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        /* 与徽标同高、同圆角，靠右对齐 */
+        .repo {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 26px;
+            padding: 0 11px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: #23272e;
+            color: var(--dim);
+            font-size: 12px;
+            line-height: 1;
+            text-decoration: none;
+            transition: color .2s var(--ease), border-color .2s var(--ease);
+        }
+
+        .repo:hover { color: var(--text); border-color: var(--accent); }
+
+        /* 图标用 currentColor，跟着文字一起变色；内联 SVG，不额外发请求 */
+        .repo svg { display: block; flex: none; }
+
+        h1 { font-size: 18px; margin: 0; letter-spacing: .3px; }
+        h2 { font-size: 13px; margin: 0 0 10px; color: var(--dim); font-weight: 600; letter-spacing: .5px; }
+
+        .badge {
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            border: 1px solid var(--line);
+            background: #23272e;
+            transition: border-color .25s var(--ease), color .25s var(--ease);
+        }
+
+        .badge.phase-connected { border-color: var(--ok); color: var(--ok); }
+        .badge.phase-scanning,
+        .badge.phase-connecting,
+        .badge.phase-retrying { border-color: var(--warn); color: var(--warn); }
+        .badge.phase-no_adapter,
+        .badge.phase-stopped { border-color: var(--err); color: var(--err); }
+
+        /* 实时指示点：只动 opacity / transform，几乎零开销 */
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--dim);
+            margin-left: -4px;
+        }
+
+        .dot.live {
+            background: var(--accent);
+            animation: pulse 1s var(--ease) infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: .35; transform: scale(.75); }
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 14px;
+        }
+
+        .card .label { font-size: 12px; color: var(--dim); }
+
+        .hr-value {
+            font-size: 40px;
+            font-weight: 700;
+            line-height: 1.15;
+            color: var(--accent);
+            transition: color .25s var(--ease);
+        }
+
+        .hr-value.stale { color: var(--dim); }
+        .hr-value small { font-size: 13px; font-weight: 400; color: var(--dim); margin-left: 6px; }
+
+        .sub { font-size: 12px; color: var(--dim); word-break: break-all; }
+        .strong { font-size: 13px; color: var(--text); word-break: break-all; }
+
+        /* 蓝牙设备 ID：单独一行，等宽字体便于辨认 */
+        .addr {
+            font: 11px/1.5 ui-monospace, Consolas, "Cascadia Mono", monospace;
+            color: var(--dim);
+            word-break: break-all;
+            margin-top: 2px;
+        }
+
+        section {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 14px;
+            margin-bottom: 16px;
+        }
+
+        button {
+            font: inherit;
+            padding: 7px 14px;
+            border-radius: 9px;
+            border: 1px solid var(--line);
+            background: #262b33;
+            color: var(--text);
+            cursor: pointer;
+            transition: transform .12s var(--ease), background-color .18s var(--ease),
+                border-color .18s var(--ease), color .18s var(--ease), opacity .18s var(--ease);
+        }
+
+        button:hover:not([disabled]) { background: #2f353f; transform: translateY(-1px); }
+        button:active:not([disabled]) { transform: translateY(0) scale(.98); }
+        button.danger { border-color: var(--err); color: var(--err); }
+        button.primary { border-color: var(--ok); color: var(--ok); }
+        button[disabled] { opacity: .38; cursor: not-allowed; }
+
+        .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+        .hint { font-size: 12px; color: var(--dim); margin: 8px 0 0; }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        label.field { display: block; font-size: 12px; color: var(--dim); }
+
+        input[type="number"] {
+            font: inherit;
+            width: 100%;
+            padding: 6px 8px;
+            margin-top: 4px;
+            border-radius: 7px;
+            border: 1px solid var(--line);
+            background: var(--panel-2);
+            color: var(--text);
+            transition: border-color .18s var(--ease);
+        }
+
+        input[type="number"]:focus { outline: none; border-color: var(--accent); }
+
+        .check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 10px; }
+
+        #log {
+            height: 300px;
+            overflow: auto;
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            border-radius: 9px;
+            padding: 10px;
+            margin: 0;
+            font: 12px/1.55 ui-monospace, Consolas, "Cascadia Mono", monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .log-line.log-warn { color: var(--warn); }
+        .log-line.log-error { color: var(--err); }
+
+        .row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, .68);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 10;
+            animation: fade .22s var(--ease);
+        }
+
+        .modal.hidden { display: none; }
+
+        @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes rise {
+            from { opacity: 0; transform: translateY(10px) scale(.985); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .modal .box {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 20px;
+            max-width: 620px;
+            max-height: 85vh;
+            overflow: auto;
+            animation: rise .26s var(--ease);
+        }
+
+        .modal h3 { margin: 0 0 10px; font-size: 16px; }
+        .modal ul { padding-left: 20px; margin: 10px 0; }
+        .modal li { margin-bottom: 8px; }
+        .modal .footer { display: flex; justify-content: flex-end; margin-top: 16px; }
+        .modal code { background: var(--panel-2); padding: 1px 5px; border-radius: 5px; word-break: break-all; }
+
+        @media (prefers-reduced-motion: reduce) {
+            * { animation: none !important; transition: none !important; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="wrap">
+        <header>
+            <div class="brand">
+                <h1>MiBand 心率控制台</h1>
+                <span id="phase" class="badge">连接中…</span>
+                <span id="version" class="badge"></span>
+                <span id="live-dot" class="dot"></span>
+            </div>
+            <a class="repo" href="https://github.com/wucy777/miband-heart-rate-enhanced"
+                target="_blank" rel="noopener noreferrer"
+                title="github.com/wucy777/miband-heart-rate-enhanced">
+                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                    <path fill="currentColor"
+                        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+                </svg>
+                <span>仓库</span>
+            </a>
+        </header>
+
+        <div class="grid">
+            <div class="card">
+                <div class="label">当前心率</div>
+                <div id="hr" class="hr-value stale">--<small>bpm</small></div>
+                <div id="contact" class="sub"></div>
+            </div>
+            <div class="card">
+                <div class="label">手环</div>
+                <div id="device" class="strong">未连接</div>
+                <div id="device-id" class="addr"></div>
+                <div id="bind-state" class="sub"></div>
+                <div id="detail" class="sub"></div>
+            </div>
+        </div>
+
+        <section>
+            <h2>操作</h2>
+            <div class="actions">
+                <button id="btn-bind" class="primary">绑定当前设备</button>
+                <button id="btn-unbind">解绑当前设备</button>
+                <button id="btn-regen">重新生成 OBS 浏览器源本地 html 文件</button>
+                <button id="btn-stop" class="danger">停止程序</button>
+            </div>
+            <label class="check">
+                <input id="set-confirm-stop" type="checkbox" />
+                点「停止程序」前需要二次确认（取消勾选则点一下立即停止）
+            </label>
+            <p class="hint">
+                <b>绑定</b>：把当前连着的这台手环记进配置，以后只认它，周围别的蓝牙心率设备不会被连上。
+                程序不会自动绑定，需要你点一下。
+            </p>
+            <p class="hint">
+                <b>解绑</b>：删掉配置里的设备信息并重新搜索。要换另一只手环时，请先关掉旧手环的心率广播，
+                确认周围只有要绑的那只在广播，再点绑定。
+            </p>
+            <p class="hint">关掉本页面不会停止程序；要停止程序请点「停止程序」。</p>
+        </section>
+
+        <section>
+            <h2>设置</h2>
+            <div class="settings-grid">
+                <label class="field">监听端口（改完需重启程序）
+                    <input id="set-port" type="number" min="1" max="65535" />
+                </label>
+                <label class="field">无数据判定（秒）
+                    <input id="set-stale" type="number" min="3" max="3600" />
+                </label>
+                <label class="field">重连间隔（秒）
+                    <input id="set-retry" type="number" min="1" max="3600" />
+                </label>
+            </div>
+            <label class="check">
+                <input id="set-open" type="checkbox" />
+                启动程序时自动打开本控制台页面
+            </label>
+            <p class="hint">
+                「无数据判定」只影响画面显示：收不到心率超过这个时间就把数字变成 <code>--</code>。
+                没戴手环时传感器本来就不上报，<b>不会因此断开蓝牙重连</b>。
+                「重连间隔」是蓝牙真的断开后，隔多久重新搜索。
+            </p>
+            <div class="actions" style="margin-top:12px">
+                <button id="btn-save" class="primary">保存设置</button>
+            </div>
+        </section>
+
+        <section>
+            <div class="row-between">
+                <h2 style="margin:0">运行日志</h2>
+                <button id="btn-clear">清空显示</button>
+            </div>
+            <pre id="log"></pre>
+        </section>
+    </div>
+
+    <div id="modal" class="modal hidden">
+        <div class="box">
+            <h3>首次使用提示</h3>
+            <p id="modal-reason"></p>
+            <p>
+                程序已经在自身同目录生成了 <code>obs-heart-rate.html</code>（自包含页面）和
+                <code>config.json</code>（程序配置文件）。
+                <b>把 OBS 的浏览器源指向这个本地文件（不是 URL）。</b>
+                本地文件永远能加载成功，所以无论先开 OBS 还是先开本程序，画面都会正常显示。
+            </p>
+            <ul>
+                <li>不这样做的话，「先开 OBS、后开本程序」时 OBS 首次启动发现浏览器源默认端口没开，
+                    后续不会重试，画面就不会显示预设心率组件。</li>
+                <li><code>obs-heart-rate.html</code> 是自包含页面，可以随便移动或重命名，
+                    程序不会再去管它；移动后记得在 OBS 里重新选一次路径。
+                    删掉了可以点「重新生成 OBS 浏览器源本地 html 文件」。</li>
+                <li><code>config.json</code> 是程序配置文件，<b>必须与程序在同一目录</b>，暂不支持移动。</li>
+                <li>指向本地文件比指向 URL 只多一次浏览器内的请求，延迟差异可以忽略
+                    （两者都是服务端推送，没有轮询间隔）。</li>
+                <li>如果你以前用过这个程序却看到这条提示，说明 <code>config.json</code> 读取失败，
+                    里面的设置已被替换为默认值，需要重新在下面的「设置」里调整。</li>
+            </ul>
+            <div class="footer">
+                <button id="btn-ack" class="primary">我知道了</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            'use strict';
+
+            var PHASE_LABEL = {
+                starting: '启动中',
+                no_adapter: '没有蓝牙适配器',
+                scanning: '正在搜索手环',
+                connecting: '正在连接',
+                connected: '已连接',
+                retrying: '重试中',
+                stopped: '已停止'
+            };
+
+            var hrEl = document.getElementById('hr');
+            var contactEl = document.getElementById('contact');
+            var deviceEl = document.getElementById('device');
+            var deviceIdEl = document.getElementById('device-id');
+            var bindStateEl = document.getElementById('bind-state');
+            var detailEl = document.getElementById('detail');
+            var phaseEl = document.getElementById('phase');
+            var versionEl = document.getElementById('version');
+            var liveDot = document.getElementById('live-dot');
+            var logEl = document.getElementById('log');
+            var modalEl = document.getElementById('modal');
+            var modalReasonEl = document.getElementById('modal-reason');
+            var bindBtn = document.getElementById('btn-bind');
+            var unbindBtn = document.getElementById('btn-unbind');
+            var confirmStopEl = document.getElementById('set-confirm-stop');
+            var openOnStartEl = document.getElementById('set-open');
+
+            function api(path, options) {
+                var opts = options || {};
+                var headers = { 'x-miband': '1' };
+                if (opts.body) {
+                    headers['content-type'] = 'application/json';
+                }
+                opts.headers = headers;
+                return fetch(path, opts).then(function (res) {
+                    if (!res.ok) {
+                        throw new Error('HTTP ' + res.status);
+                    }
+                    return res.json();
+                });
+            }
+
+            function post(path, body) {
+                return api(path, {
+                    method: 'POST',
+                    body: body === undefined ? undefined : JSON.stringify(body)
+                });
+            }
+
+            // 只临时改文案，不动 disabled —— 可用状态由 renderState 统一决定
+            function flash(button, text) {
+                var original = button.textContent;
+                button.textContent = text;
+                setTimeout(function () {
+                    if (button.textContent === text) {
+                        button.textContent = original;
+                    }
+                }, 1200);
+            }
+
+            // ------------------------------------------------ 状态
+            function renderState(data) {
+                var hr = data.heart_rate || {};
+                var status = data.status || {};
+                var value = typeof hr.value === 'number' ? hr.value : 0;
+                var stale = hr.stale === true || value <= 0;
+
+                hrEl.innerHTML = (stale ? '--' : String(value)) + '<small>bpm</small>';
+                hrEl.className = 'hr-value' + (stale ? ' stale' : '');
+                liveDot.className = 'dot' + (stale ? '' : ' live');
+
+                if (stale) {
+                    contactEl.textContent = '没有实时数据';
+                } else if (hr.sensor_contact === true) {
+                    contactEl.textContent = '已佩戴';
+                } else if (hr.sensor_contact === false) {
+                    contactEl.textContent = '未佩戴';
+                } else {
+                    contactEl.textContent = '该手环不上报佩戴状态';
+                }
+
+                phaseEl.textContent = PHASE_LABEL[status.phase] || status.phase || '未知';
+                phaseEl.className = 'badge phase-' + (status.phase || 'unknown');
+                detailEl.textContent = status.detail || '';
+
+                var connectedId = status.device_id || null;
+                var boundId = data.bound_device_id || null;
+
+                if (connectedId) {
+                    // 设备名一行、蓝牙地址单独一行，不挤在一起
+                    deviceEl.textContent = status.device_name || '(未知设备)';
+                    deviceIdEl.textContent = connectedId;
+                } else if (boundId) {
+                    deviceEl.textContent = '未连接';
+                    deviceIdEl.textContent = '';
+                } else {
+                    deviceEl.textContent = '未连接（尚未绑定任何设备）';
+                    deviceIdEl.textContent = '';
+                }
+
+                if (boundId) {
+                    bindStateEl.textContent = connectedId === boundId
+                        ? '已绑定当前设备'
+                        : '已绑定 ' + (data.bound_device_name || boundId) + '，当前连的是另一台';
+                } else if (connectedId) {
+                    bindStateEl.textContent = '未绑定：点「绑定当前设备」把它固定下来';
+                } else {
+                    bindStateEl.textContent = '未绑定';
+                }
+
+                // 绑定按钮：只有连上了、而且当前设备不是绑定目标时才可点
+                bindBtn.disabled = !connectedId || connectedId === boundId;
+                unbindBtn.disabled = !boundId;
+            }
+
+            function pumpState(first) {
+                api('/api/state' + (first ? '' : '?since=1'))
+                    .then(function (data) {
+                        renderState(data);
+                        pumpState(false);
+                    })
+                    .catch(function () {
+                        setTimeout(function () { pumpState(false); }, 1000);
+                    });
+            }
+
+            // ------------------------------------------------ 日志
+            var logSince = 0;
+            var autoScroll = true;
+
+            logEl.addEventListener('scroll', function () {
+                autoScroll = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
+            });
+
+            function appendLogs(lines) {
+                if (!lines || !lines.length) {
+                    return;
+                }
+                var frag = document.createDocumentFragment();
+                lines.forEach(function (line) {
+                    var div = document.createElement('div');
+                    div.className = 'log-line log-' + line.level;
+                    div.textContent = '[' + new Date().toLocaleTimeString() + '] ' + line.msg;
+                    frag.appendChild(div);
+                });
+                logEl.appendChild(frag);
+                while (logEl.childElementCount > 800) {
+                    logEl.removeChild(logEl.firstChild);
+                }
+                if (autoScroll) {
+                    logEl.scrollTop = logEl.scrollHeight;
+                }
+            }
+
+            function pumpLogs() {
+                api('/api/logs?since=' + logSince + '&wait=25')
+                    .then(function (data) {
+                        logSince = data.latest;
+                        appendLogs(data.lines);
+                        pumpLogs();
+                    })
+                    .catch(function () {
+                        setTimeout(pumpLogs, 1000);
+                    });
+            }
+
+            // ------------------------------------------------ 配置
+            function loadConfig() {
+                api('/api/config').then(function (data) {
+                    var cfg = data.config || {};
+                    versionEl.textContent = 'v' + data.version;
+
+                    document.getElementById('set-port').value = cfg.port;
+                    document.getElementById('set-stale').value = cfg.stale_after_secs;
+                    document.getElementById('set-retry').value = cfg.retry_interval_secs;
+                    openOnStartEl.checked = cfg.open_browser_on_start !== false;
+                    confirmStopEl.checked = cfg.confirm_before_stop !== false;
+
+                    if (cfg.first_run_notice_shown !== true) {
+                        modalReasonEl.textContent = data.first_run_reason || '';
+                        modalEl.classList.remove('hidden');
+                    }
+                }).catch(function (err) {
+                    console.error(err);
+                });
+            }
+
+            function saveConfig() {
+                var payload = {
+                    port: Number(document.getElementById('set-port').value) || 0,
+                    stale_after_secs: Number(document.getElementById('set-stale').value) || 0,
+                    retry_interval_secs: Number(document.getElementById('set-retry').value) || 0,
+                    open_browser_on_start: openOnStartEl.checked
+                };
+                var button = document.getElementById('btn-save');
+                button.disabled = true;
+                post('/api/config', payload).then(function () {
+                    button.disabled = false;
+                    button.textContent = '已保存';
+                    setTimeout(function () { button.textContent = '保存设置'; }, 1200);
+                    loadConfig();
+                }).catch(function (err) {
+                    button.disabled = false;
+                    alert('保存失败：' + err);
+                });
+            }
+
+            // ------------------------------------------------ 事件绑定
+            document.getElementById('btn-save').addEventListener('click', saveConfig);
+            document.getElementById('btn-clear').addEventListener('click', function () {
+                logEl.textContent = '';
+            });
+
+            // 这个勾选框是即时生效的偏好，切换就存，不用点「保存设置」。
+            confirmStopEl.addEventListener('change', function () {
+                post('/api/config', { confirm_before_stop: confirmStopEl.checked })
+                    .catch(function (err) { console.error(err); });
+            });
+
+            bindBtn.addEventListener('click', function () {
+                post('/api/bind').then(function (data) {
+                    if (data.ok) {
+                        flash(bindBtn, '已绑定');
+                    } else {
+                        alert(data.message || '绑定失败');
+                    }
+                }).catch(function (err) {
+                    alert('绑定失败：' + err);
+                });
+            });
+
+            unbindBtn.addEventListener('click', function () {
+                if (!confirm('确定解绑当前设备吗？解绑后会重新搜索手环。')) {
+                    return;
+                }
+                post('/api/unbind').then(function (data) {
+                    if (!data.ok) {
+                        alert(data.message || '解绑失败');
+                    }
+                }).catch(function (err) {
+                    alert('解绑失败：' + err);
+                });
+            });
+
+            document.getElementById('btn-regen').addEventListener('click', function () {
+                post('/api/regen-obs-page').then(function (data) {
+                    if (!data.ok) {
+                        alert(data.message || '生成失败');
+                    }
+                }).catch(function (err) {
+                    alert('生成失败：' + err);
+                });
+            });
+
+            document.getElementById('btn-stop').addEventListener('click', function () {
+                // 勾选「停止前需要二次确认」时才弹确认框；不勾点一下就直接停。
+                if (confirmStopEl.checked &&
+                    !confirm('确定要停止程序吗？停止后需要重新双击 exe 才能再次启动。')) {
+                    return;
+                }
+                post('/api/stop').then(showStopped).catch(showStopped);
+            });
+
+            // 后台已经退出时 fetch 会失败（连接被重置），这本身就说明停成功了，
+            // 所以成功和失败都走同一套收尾。
+            function showStopped() {
+                modalEl.classList.add('hidden');
+                document.body.innerHTML =
+                    '<div class="wrap"><div class="card">' +
+                    '<h1 style="margin:0 0 8px">程序已停止</h1>' +
+                    '<p class="hint" style="margin:0">后台进程已退出，本页面可以手动关闭。</p>' +
+                    '</div></div>';
+
+                // 尽力尝试自动关闭本页。
+                // 浏览器只允许「由脚本打开的窗口」自己关闭，而本页是程序用系统方式打开的；
+                // Edge 实测可以关掉，其他浏览器若拒绝，就保留上面那句提示，不影响后台已经停止。
+                setTimeout(function () {
+                    try { window.close(); } catch (err) { /* 忽略 */ }
+                }, 400);
+            }
+
+            document.getElementById('btn-ack').addEventListener('click', function () {
+                modalEl.classList.add('hidden');
+                post('/api/notice-ack').catch(function (err) { console.error(err); });
+            });
+
+            // ------------------------------------------------ 启动
+            loadConfig();
+            pumpState(true);
+            pumpLogs();
+        })();
+    </script>
+</body>
+
+</html>

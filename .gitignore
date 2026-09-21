@@ -1,0 +1,9 @@
+/target
+/dist
+
+# 临时前置文件与调研用的依赖源码
+/_cache/
+
+# 运行时在 exe 同目录生成的文件
+/config.json
+/obs-heart-rate.html

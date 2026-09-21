@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<!-- thanks: https://github.com/StudyLeaks/heartbeat/ -->
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Heart Beat StudyLeaks</title>
+    <!--HR_CONFIG-->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Young+Serif&display=swap');
+
+        :root {
+            --heart-speed: 1s;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+        }
+
+        .heart {
+            height: 30px;
+            width: 30px;
+            background: #f20044;
+            position: relative;
+            transform: rotate(-45deg) translate(-4px, 4px);
+            box-shadow: -10px 10px 90px #f20044;
+            animation: heart var(--heart-speed) linear infinite;
+            margin: 20px;
+        }
+
+        #heart-rate-number {
+            font-size: 50px;
+            font-family: 'Young Serif', Georgia, serif;
+            vertical-align: text-top;
+            min-width: 2ch;
+            text-align: center;
+
+            color: #ffffff;
+            text-shadow:
+                #f20044 0px 0px 20px,
+                #f20044 0px 0px 40px,
+                #fff 0px 0px 50px,
+                #fff 0px 0px 60px;
+        }
+
+        @keyframes heart {
+            0% {
+                transform: rotate(-45deg) scale(1.07) translate(-4px, 4px);
+            }
+
+            80% {
+                transform: rotate(-45deg) scale(1) translate(-4px, 4px);
+            }
+
+            100% {
+                transform: rotate(-45deg) scale(0.9) translate(-4px, 4px);
+            }
+        }
+
+        .heart::before {
+            content: "";
+            position: absolute;
+            height: 30px;
+            width: 30px;
+            background: #f20044;
+            top: -50%;
+            border-radius: 40px;
+            box-shadow: -5px -5px 50px #f20044;
+        }
+
+        .heart::after {
+            content: "";
+            position: absolute;
+            height: 30px;
+            width: 30px;
+            background: #f20044;
+            right: -50%;
+            border-radius: 40px;
+            box-shadow: 5px 5px 50px #f20044;
+        }
+    </style>
+    <script>
+        // 由程序生成 OBS 自包含页面时，会在这里注入 window.__HR_URL / window.__HR_JSONP。
+        // 直接通过 http://127.0.0.1:3030/ 打开时用相对地址即可。
+        (function () {
+            'use strict';
+
+            var HEART_RATE_URL = window.__HR_URL || '/heartrate';
+            var JSONP_URL = window.__HR_JSONP || null;
+
+            var root = document.documentElement;
+            // 数字元素在 <head> 解析时还不存在，等 DOM 就绪后再取。
+            var numberElement = null;
+
+            function sleep(ms) {
+                return new Promise(function (resolve) { setTimeout(resolve, ms); });
+            }
+
+            function apply(data) {
+                if (!numberElement) {
+                    return;
+                }
+                var value = (data && typeof data.value === 'number') ? data.value : 0;
+                var stale = !data || data.stale === true || value <= 0;
+
+                if (stale) {
+                    // 没有实时数据时只把数字变成 `--`，红心照常跳、照常红。
+                    // 不要把心变灰或变暗：观众会以为主播出事了。
+                    numberElement.textContent = '--';
+                } else {
+                    numberElement.textContent = String(value);
+                    root.style.setProperty('--heart-speed', (60 / value) + 's');
+                }
+            }
+
+            // ---- 主通道：长轮询 fetch ----
+            // 服务端有数据就立刻回包，客户端拿到就马上再挂一次，中间没有轮询间隔，
+            // 所以延迟和直接指向 URL 完全一样。
+            var fetchFailures = 0;
+
+            function pumpFetch() {
+                fetch(HEART_RATE_URL, { cache: 'no-store' })
+                    .then(function (response) {
+                        if (!response.ok) {
+                            throw new Error('HTTP ' + response.status);
+                        }
+                        return response.json();
+                    })
+                    .then(function (data) {
+                        fetchFailures = 0;
+                        apply(data);
+                        pumpFetch();
+                    })
+                    .catch(function (err) {
+                        fetchFailures += 1;
+                        // 3030 还没起来时请求必然失败，安静地重试就行。
+                        if (JSONP_URL && fetchFailures >= 2) {
+                            console.warn('fetch 不可用，改用 JSONP 兜底：', err);
+                            pumpJsonp();
+                            return;
+                        }
+                        sleep(1000).then(pumpFetch);
+                    });
+            }
+
+            // ---- 兜底通道：JSONP ----
+            // 万一 OBS 的 CEF 不允许 file:// 页面 fetch http，就用 <script> 拉数据；
+            // 跨源加载脚本永远不被拦。正常情况下不会走到这里。
+            var jsonpStarted = false;
+
+            function pumpJsonp() {
+                if (jsonpStarted) {
+                    return;
+                }
+                jsonpStarted = true;
+
+                var applied = false;
+                window.__hr = function (data) {
+                    applied = true;
+                    apply(data);
+                };
+
+                var load = function () {
+                    applied = false;
+                    var script = document.createElement('script');
+                    script.src = JSONP_URL + '?_=' + Date.now();
+                    var next = function (delay) {
+                        script.remove();
+                        setTimeout(load, delay);
+                    };
+                    script.onerror = function () { next(1000); };
+                    script.onload = function () { next(applied ? 30 : 1000); };
+                    document.head.appendChild(script);
+                };
+
+                load();
+            }
+
+            function boot() {
+                numberElement = document.getElementById('heart-rate-number');
+                pumpFetch();
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', boot);
+            } else {
+                boot();
+            }
+        })();
+    </script>
+</head>
+
+<body>
+    <div id="heart" class="heart"></div>
+    <div id="heart-rate-number">--</div>
+</body>
+
+</html>
